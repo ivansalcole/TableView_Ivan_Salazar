@@ -9,9 +9,15 @@ import javafx.scene.control.Button;
 import javafx.scene.control.DatePicker;
 import javafx.scene.control.TableColumn;
 import javafx.scene.control.TableView;
+import javafx.scene.control.TextArea;
 import javafx.scene.control.TextField;
 import javafx.scene.control.cell.PropertyValueFactory;
 
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Statement;
 import java.time.LocalDate;
 import java.util.ArrayDeque;
 import java.util.Deque;
@@ -42,6 +48,35 @@ public class HelloController {
         colApellido.setCellValueFactory(new PropertyValueFactory<>("apellido"));
         colFecha.setCellValueFactory(new PropertyValueFactory<>("fechaNacimiento"));
         tablaPersonas.setItems(personas);
+        cargarPersonas();
+    }
+
+    private void cargarPersonas() {
+        String sql = "SELECT id, nombre, apellido, fecha_nacimiento FROM personas";
+        Connection con = conexionDB.getConexion();
+        if (con == null) {
+            mostrarAviso("No se ha podido conectar con la base de datos.\n" + conexionDB.getUltimoError());
+            return;
+        }
+        try (Statement st = con.createStatement();
+             ResultSet rs = st.executeQuery(sql)) {
+
+            personas.clear();
+            int maxId = 0;
+            while (rs.next()) {
+                int id = rs.getInt("id");
+                Persona p = new Persona(
+                        id,
+                        rs.getString("nombre"),
+                        rs.getString("apellido"),
+                        rs.getDate("fecha_nacimiento").toLocalDate());
+                personas.add(p);
+                maxId = Math.max(maxId, id);
+            }
+            siguienteId = maxId + 1;
+        } catch (SQLException e) {
+            mostrarAviso("Error al cargar los datos: " + e.getMessage());
+        }
     }
 
     @FXML
@@ -55,12 +90,37 @@ public class HelloController {
             return;
         }
 
-        personas.add(new Persona(siguienteId++, nombre, apellido, fecha));
+        Persona p = new Persona(siguienteId, nombre, apellido, fecha);
+        if (!insertarPersona(p)) {
+            return;
+        }
+        personas.add(p);
+        siguienteId++;
 
         tfNombre.clear();
         tfApellido.clear();
         dpfecha.setValue(null);
         tfNombre.requestFocus();
+    }
+
+    private boolean insertarPersona(Persona p) {
+        String sql = "INSERT INTO personas (id, nombre, apellido, fecha_nacimiento) VALUES (?, ?, ?, ?)";
+        Connection con = conexionDB.getConexion();
+        if (con == null) {
+            mostrarAviso("No se ha podido conectar con la base de datos.\n" + conexionDB.getUltimoError());
+            return false;
+        }
+        try (PreparedStatement ps = con.prepareStatement(sql)) {
+            ps.setInt(1, p.getId());
+            ps.setString(2, p.getNombre());
+            ps.setString(3, p.getApellido());
+            ps.setDate(4, java.sql.Date.valueOf(p.getFechaNacimiento()));
+            ps.executeUpdate();
+            return true;
+        } catch (SQLException e) {
+            mostrarAviso("Error al guardar en la base de datos: " + e.getMessage());
+            return false;
+        }
     }
 
     @FXML
@@ -70,8 +130,28 @@ public class HelloController {
             mostrarAviso("Selecciona una fila de la tabla para eliminarla.");
             return;
         }
+        if (!eliminarPersona(seleccionada)) {
+            return;
+        }
         personas.remove(seleccionada);
         eliminadas.push(seleccionada);
+    }
+
+    private boolean eliminarPersona(Persona p) {
+        String sql = "DELETE FROM personas WHERE id = ?";
+        Connection con = conexionDB.getConexion();
+        if (con == null) {
+            mostrarAviso("No se ha podido conectar con la base de datos.\n" + conexionDB.getUltimoError());
+            return false;
+        }
+        try (PreparedStatement ps = con.prepareStatement(sql)) {
+            ps.setInt(1, p.getId());
+            ps.executeUpdate();
+            return true;
+        } catch (SQLException e) {
+            mostrarAviso("Error al eliminar de la base de datos: " + e.getMessage());
+            return false;
+        }
     }
 
     @FXML
@@ -81,6 +161,10 @@ public class HelloController {
             return;
         }
         Persona p = eliminadas.pop();
+        if (!insertarPersona(p)) {
+            eliminadas.push(p);
+            return;
+        }
         // Se vuelve a colocar en su sitio según el ID
         int pos = 0;
         while (pos < personas.size() && personas.get(pos).getId() < p.getId()) pos++;
@@ -91,7 +175,15 @@ public class HelloController {
     private void mostrarAviso(String mensaje) {
         Alert alert = new Alert(Alert.AlertType.WARNING);
         alert.setHeaderText(null);
-        alert.setContentText(mensaje);
+        alert.setResizable(true);
+
+        TextArea area = new TextArea(mensaje);
+        area.setEditable(false);
+        area.setWrapText(true);
+        area.setPrefWidth(550);
+        area.setPrefHeight(180);
+
+        alert.getDialogPane().setContent(area);
         alert.showAndWait();
     }
 }
